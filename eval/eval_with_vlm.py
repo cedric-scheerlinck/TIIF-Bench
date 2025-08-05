@@ -95,7 +95,7 @@ def generate_with_prompt(prompt, image_path, client, model='gpt-4o'):
     completion = client.chat.completions.create(
         model=model,
         messages=messages,
-        temperature=1.0
+        temperature=1.0 # You may set it to 0 if you require stricter reproducibility.
     )
     
     return completion.choices[0].message.content

@@ -5,9 +5,37 @@ Official repository for the paper ["TIIF-Bench: How Does Your T2I Model Follow Y
 [🌐 Webpage](https://a113n-w3i.github.io/TIIF_Bench/) [📖 Paper](https://www.arxiv.org/abs/2506.02161) [🤗 Huggingface Dataset](https://huggingface.co/datasets/A113NW3I/TIIF-Bench-Data) [🏆 Leaderboard](https://a113n-w3i.github.io/TIIF_Bench/#leaderboard)
 
 ## 🔥 News
+- **[2025.08]** 🚀 Huge thanks to **[Qwen-Image](https://github.com/QwenLM/Qwen-Image?tab=readme-ov-file)** for citing our benchmark! It achieves a **new SOTA among all open-source models🔥** — let’s make open-source image generation great again!
+- **[2025.07]** 🔥 **[BAGEL](https://github.com/ByteDance-Seed/Bagel?tab=readme-ov-file)** achieves SOTA among diffusion- based open-source T2I models on TIIF-Bench, cool 🎉!
 - **[2025.06]** 🔥 **[T2I-R1](https://github.com/CaraJ7/T2I-R1?tab=readme-ov-file)** achieves SOTA among AR-based open-source T2I models on TIIF-Bench, cool 🎉!
 - **[2025.05]** 🔥 We release the generation results of **closed-source** models on the TIIF-Bench **testmini** subset on [🤗Hugging Face](https://huggingface.co/datasets/A113NW3I/TIIF-Bench-Data).
 - **[2025.05]** 🔥 We release all generation prompts (used for the evaluated T2I models) and evaluation prompts (used for evaluation models such as GPT-4o) of **TIIF-Bench** in the [`./data`](./prompts) directory.
+
+## Introduction
+TIIF-Bench is a comprehensive, well-structured, and difficulty-graded benchmark specifically designed for evaluating modern text-to-image (T2I) models.
+
+Previous benchmarks suffer from several key limitations:
+
+1. **Short and simplistic prompts** — Most prompts follow fixed templates, contain repetitive semantics, and lack the complexity and richness of real-world long-form instructions.
+![other-bench](./assets/other-bench.png)
+
+2. **Sensitivity to prompt length** — Many T2I models show significant performance differences when given semantically identical prompts of varying lengths, yet existing benchmarks fail to account for this variation.
+![short-long-ablation](./assets/short-long-ablation.png)
+
+3. **Coarse-grained evaluation** — Traditional evaluation methods struggle to accurately assess whether complex instructions are truly followed in modern, high-quality generations.
+![other-eval-wrong](./assets/other-eval-wrong.png)
+
+TIIF-Bench addresses these challenges with the following innovations:
+
+📌 A collection of 5,000 high-quality and diverse prompts, covering new dimensions such as style control, text rendering, and real-world design tasks.
+
+📌 Each instruction comes in both a concise version and a rhetorically complex version, carefully crafted to test models’ language comprehension and generalization abilities.
+
+📌 We introduce fine-grained, attribute-specific evaluation questions that enable large models to assess generations like human evaluators would 🧑‍🏫.
+
+📌 We propose a novel evaluation metric GNED, specifically designed to measure the accuracy of text rendering in images 📝.
+
+📌 Finally, we conducted a comprehensive user study, demonstrating that TIIF-Bench scores correlate strongly with human preferences 👍!
 
 
 ## 🔧 How to Start
