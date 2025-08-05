@@ -6,7 +6,7 @@ Official repository for the paper ["TIIF-Bench: How Does Your T2I Model Follow Y
 
 ## 🔥 News
 - **[2025.08]** 🚀 Huge thanks to **[Qwen-Image](https://github.com/QwenLM/Qwen-Image?tab=readme-ov-file)** for citing our benchmark! It achieves a **new SOTA among all open-source models🔥** — let’s make open-source image generation great again!
-- **[2025.07]** 🔥 **[BAGEL](https://github.com/ByteDance-Seed/Bagel?tab=readme-ov-file)** achieves SOTA among diffusion- based open-source T2I models on TIIF-Bench, cool 🎉!
+- **[2025.07]** 🔥 **[BAGEL](https://github.com/ByteDance-Seed/Bagel?tab=readme-ov-file)** achieves SOTA among diffusion-based open-source T2I models on TIIF-Bench, cool 🎉!
 - **[2025.06]** 🔥 **[T2I-R1](https://github.com/CaraJ7/T2I-R1?tab=readme-ov-file)** achieves SOTA among AR-based open-source T2I models on TIIF-Bench, cool 🎉!
 - **[2025.05]** 🔥 We release the generation results of **closed-source** models on the TIIF-Bench **testmini** subset on [🤗Hugging Face](https://huggingface.co/datasets/A113NW3I/TIIF-Bench-Data).
 - **[2025.05]** 🔥 We release all generation prompts (used for the evaluated T2I models) and evaluation prompts (used for evaluation models such as GPT-4o) of **TIIF-Bench** in the [`./data`](./prompts) directory.
