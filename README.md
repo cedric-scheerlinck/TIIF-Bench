@@ -139,15 +139,15 @@ eval_results/
    pip install paddleocr
    python eval/paddleocr_models.py
    ```
-  You need to merge the ground truth words (e.g., ["drink","tea","eat"]) of the corresponding image prompts (short/long) as the "text" field into the OCR-generated JSON file, with the following format:
-   ```
-  {
-  "image_name": "0.png",
-  "short_image_ocr_results": [],
-  "long_image_ocr_results": [],
-  "text": []
-  }
-   ```
+   You need to merge the ground truth words (e.g., ["drink","tea","eat"]) of the corresponding image prompts (short/long) as the "text" field into the OCR-generated JSON file, with the following format:
+      ```
+   {
+   "image_name": "0.png",
+   "short_image_ocr_results": [],
+   "long_image_ocr_results": [],
+   "text": []
+   }
+      ```
 2. **Run evaluation:**
    ```bash
    python eval/cal_gned_and_recall_models.py
