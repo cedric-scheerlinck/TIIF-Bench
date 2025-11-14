@@ -156,14 +156,11 @@ eval_results/
 ## 📣 Citation
 
 ```
-@misc{wei2025tiifbenchdoest2imodel,
-      title={TIIF-Bench: How Does Your T2I Model Follow Your Instructions?}, 
-      author={Xinyu Wei and Jinrui Zhang and Zeqing Wang and Hongyang Wei and Zhen Guo and Lei Zhang},
-      year={2025},
-      eprint={2506.02161},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2506.02161}, 
+@article{wei2025tiif,
+  title={TIIF-Bench: How Does Your T2I Model Follow Your Instructions?},
+  author={Wei, Xinyu and Zhang, Jinrui and Wang, Zeqing and Wei, Hongyang and Guo, Zhen and Zhang, Lei},
+  journal={arXiv preprint arXiv:2506.02161},
+  year={2025}
 }
 ```
 
