@@ -109,6 +109,9 @@ def main():
         overall_df = pd.DataFrame(overall_rows, columns=['Model', 'overall-short', 'overall-long']).set_index('Model')
         print("\n==== Overall average score of 9 sub-attributes ====")
         print(overall_df.round(4))
+        
+        # Restore stdout before file closes
+        sys.stdout = sys.__stdout__
 
 if __name__ == '__main__':
     main()

@@ -114,4 +114,6 @@ ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 
+eval-results/
+
 # End of file

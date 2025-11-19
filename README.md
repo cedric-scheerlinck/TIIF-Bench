@@ -84,13 +84,7 @@ output/
 
 1. **Set variables:**
    ```bash
-   JSONL_DIR=data/testmini_eval_prompts
-   IMAGE_DIR=output
-   MODEL_NAME=YOUR_MODEL_NAME
-   OUTPUT_DIR=eval_results
-   API_KEY=YOUR_API_KEY
-   BASE_URL=YOUR_API_BASE
-   MODEL="gpt-4o"
+    JSONL_DIR=data/test_eval_prompts; export IMAGE_DIR=output; export MODEL_NAME=model; export OUTPUT_DIR=eval_results; export BASE_URL=https://api.openai.com/v1; export MODEL="gpt-4o"; export API_KEY=$OPENAI_API_KEY
    ```
 
 2. **Run evaluation:**
