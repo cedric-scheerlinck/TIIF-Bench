@@ -8,6 +8,13 @@ def main():
     parser.add_argument('--output_txt', type=str, required=True, help='Output TXT file path')
     args = parser.parse_args()
 
+    # Set pandas display options to prevent text truncation
+    pd.set_option('display.max_columns', None)
+    pd.set_option('display.max_rows', None)
+    pd.set_option('display.max_colwidth', None)
+    pd.set_option('display.width', None)
+    pd.set_option('display.max_seq_items', None)
+
     # Redirect all print output to both console and txt file
     class Tee(object):
         def __init__(self, *files):

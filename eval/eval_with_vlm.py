@@ -8,6 +8,8 @@ import re
 from tqdm import tqdm
 import math
 import random
+import hashlib
+from datetime import datetime
 
 raw_prompt = '''
 You are tasked with conducting a careful examination of the provided image. Based on the content of the image, please answer the following yes or no questions:
@@ -71,13 +73,65 @@ def load_jsonl_lines(jsonl_file):
     return lines
 
 
-def generate_with_prompt(prompt, image_path, client, model='gpt-4o'):
+def get_cache_key(prompt, image_path, model):
+    """Generate SHA256 hash from prompt + image_path + model"""
+    cache_string = f"{prompt}|{image_path}|{model}"
+    return hashlib.sha256(cache_string.encode('utf-8')).hexdigest()
+
+
+def get_cache_path(cache_dir, cache_key):
+    """Return path to cache file"""
+    return os.path.join(cache_dir, f"{cache_key}.json")
+
+
+def load_from_cache(cache_path):
+    """Load cached response if exists, return None otherwise"""
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, 'r', encoding='utf-8') as f:
+                cached_data = json.load(f)
+                return cached_data
+        except Exception:
+            return None
+    return None
+
+
+def save_to_cache(cache_path, prompt, model, completion, temperature, system_message, base_url, task):
+    ensure_dir(os.path.dirname(cache_path))
+    cache_data = {
+        'prompt': prompt,
+        'model': model,
+        'temperature': temperature,
+        'system_message': system_message,
+        'base_url': base_url,
+        'task': task,
+        'timestamp': datetime.now().isoformat(),
+        'completion': completion.model_dump()
+    }
+    with open(cache_path, 'w', encoding='utf-8') as f:
+        json.dump(cache_data, f, ensure_ascii=False, indent=2)
+
+
+def generate_with_prompt(prompt, task, client, model='gpt-4o', cache_dir=None, temperature=1.0, base_url=None):
+    system_message = "You are a professional image critic."
+    image_path = task["img_path"]
+    
+    # Check cache first
+    if cache_dir and False:
+        cache_key = get_cache_key(prompt, image_path, model)
+        cache_path = get_cache_path(cache_dir, cache_key)
+        cached_data = load_from_cache(cache_path)
+        if cached_data is not None:
+            completion_dict = cached_data.get('completion', {})
+            if completion_dict and 'choices' in completion_dict and len(completion_dict.get('choices', [])) > 0:
+                return completion_dict['choices'][0].get('message', {}).get('content')
+    
     import base64
     with open(image_path, "rb") as image_file:
         image_data = base64.b64encode(image_file.read()).decode('utf-8')
     
     messages = [
-        {"role": "system", "content": "You are a professional image critic."},
+        {"role": "system", "content": system_message},
         {
             "role": "user", 
             "content": [
@@ -95,10 +149,20 @@ def generate_with_prompt(prompt, image_path, client, model='gpt-4o'):
     completion = client.chat.completions.create(
         model=model,
         messages=messages,
-        temperature=1.0 # You may set it to 0 if you require stricter reproducibility.
+        temperature=temperature
     )
     
-    return completion.choices[0].message.content
+    response = completion.choices[0].message.content
+    
+    # Save full completion to cache
+    if cache_dir:
+        cache_key = get_cache_key(prompt, image_path, model)
+        cache_path = get_cache_path(cache_dir, cache_key)
+        if base_url is None:
+            base_url = getattr(client, 'base_url', None) or (hasattr(client, '_client') and getattr(client._client, 'base_url', None)) or 'unknown'
+        save_to_cache(cache_path, prompt, model, completion, temperature, system_message, base_url, task)
+    
+    return response
 
 def format_questions_prompt(raw_prompt, questions):
     question_texts = [item.strip() for item in questions]
@@ -161,6 +225,8 @@ def collect_tasks(jsonl_dir, image_dir, eval_model, output_dir, sample_idx_file=
 
 class OutputFormatError(Exception):
     pass
+
+
 def extract_yes_no(model_output, questions):
     lines = [line.strip() for line in model_output.strip().split('\n') if line.strip()]
     preds = []
@@ -180,19 +246,28 @@ def main(args):
         base_url=args.base_url
     )
 
+    # Create cache directory
+    cache_dir = os.path.join(args.output_dir, '.cache')
+    ensure_dir(cache_dir)
+
     tasks = collect_tasks(args.jsonl_dir, args.image_dir, args.eval_model, args.output_dir, args.sample_idx_file, args.postfix)
     print(f"Total tasks to process: {len(tasks)}")
+    # fail_count = 0
 
-    retry_tasks = []
-    while tasks:
-        retry_tasks.clear()
+    for i in range(3):
+        if not tasks:
+            break
+        print(f"Retry {i}")
+    # while tasks:
+    # if True:
+        retry_tasks = []
         for task in tqdm(tasks):
             try:
                 item = task["jsonl_line"]
                 questions = item.get("yn_question_list", [])
                 gt_answers = item.get("yn_answer_list", [])
                 prompt = format_questions_prompt(raw_prompt, questions)
-                model_output = generate_with_prompt(prompt, task["img_path"], client, model=args.model)
+                model_output = generate_with_prompt(prompt, task, client, model=args.model, cache_dir=cache_dir, base_url=args.base_url)
                 print(model_output)
                 model_pred = extract_yes_no(model_output, questions)
                 result = {
@@ -210,13 +285,16 @@ def main(args):
                 print(f"Saved: {task['out_path']}")
 
             except Exception as e:
-                print(f"[Error] {task['img_path']} : {e}")
+                print(f"[Error] {questions} {task['img_path']} : {e}")
+                # fail_count += 1
                 retry_tasks.append(task)
                 time.sleep(2)
         if retry_tasks:
             print(f"Retrying {len(retry_tasks)} failed tasks...")
             time.sleep(5)
-        tasks = retry_tasks.copy()
+        tasks = retry_tasks
+    print(f"Fail count: {len(retry_tasks)} after {i} retries")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

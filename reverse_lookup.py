@@ -8,8 +8,8 @@ def main() -> None:
     for f in Path("data/test_prompts").glob("*.jsonl"):
         for line in f.open():
             d = json.loads(line)
-            long_desc = d["long_description"]
-            short_desc = d["short_description"]
+            long_desc = d["long_description"].strip()
+            short_desc = d["short_description"].strip()
             t = d["type"]
             if long_desc in lookup:
                 raise ValueError(f"Duplicate long description: {long_desc}")

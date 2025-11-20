@@ -24,7 +24,7 @@ from pathlib import Path
 from tqdm import tqdm
 
 
-def load_reverse_lookup(lookup_path: str = "data/reverse_lookup.json") -> dict[str, list[str]]:
+def load_reverse_lookup(lookup_path: str = "data/reverse_lookup.json") -> dict[str, tuple[str, str]]:
     """Load reverse_lookup.json file."""
     lookup_file = Path(lookup_path)
     if not lookup_file.exists():
@@ -32,7 +32,11 @@ def load_reverse_lookup(lookup_path: str = "data/reverse_lookup.json") -> dict[s
     
     with lookup_file.open("r") as f:
         lookup = json.load(f)
-    
+
+    lookup = {k: tuple(v) for k, v in lookup.items()}
+
+    assert all(len(v) == 2 for v in lookup.values()), "Invalid lookup format"
+
     print(f"Loaded {len(lookup)} prompt mappings from {lookup_path}")
     return lookup
 
@@ -41,7 +45,7 @@ def find_prompt_line_number(
     prompt: str,
     dimension: str,
     jsonl_dir: Path,
-    desc_length: str
+    prompt_key: str
 ) -> int | None:
     """
     Find the line number (0-indexed) of a prompt in the corresponding JSONL file.
@@ -55,9 +59,6 @@ def find_prompt_line_number(
     if not jsonl_file.exists():
         return None
     
-    # Determine which field to check based on desc_length
-    field_name = "long_description" if desc_length == "long_description" else "short_description"
-    
     with jsonl_file.open("r", encoding="utf-8") as f:
         for line_idx, line in enumerate(f):
             line = line.strip()
@@ -65,7 +66,8 @@ def find_prompt_line_number(
                 continue
             try:
                 data = json.loads(line)
-                if data.get(field_name) == prompt:
+                # if data.get(prompt_key).strip() == prompt:
+                if data.get(prompt_key).strip() in prompt:
                     return line_idx
             except json.JSONDecodeError:
                 continue
@@ -101,18 +103,28 @@ def read_prompt_file(prompt_path: Path) -> str | None:
     if not prompt_file.exists():
         return None
     
-    with prompt_file.open("r", encoding="utf-8") as f:
+    with prompt_file.open("r") as f:
         prompt = f.read().strip()
     
     return prompt
 
 
+def get_from_lookup(lookup: dict[str, tuple[str, str]], prompt: str) -> tuple[str, str] | None:
+    """get value of lookup[key] if key in prompt"""
+    value = None
+    for key in lookup:
+        if key in prompt:
+            if value is not None:
+                raise ValueError(f"Multiple keys found in prompt: {key} and {value}")
+            value = lookup[key]
+    return value
+
 def process_sample_directory(
     sample_dir: Path,
-    lookup: dict[str, list[str]],
+    lookup: dict[str, tuple[str, str]],
     output_dir: Path,
     model_name: str,
-    desc_length: str,
+    prompt_key: str,
     jsonl_dir: Path,
 ) -> tuple[bool, str]:
     """
@@ -127,18 +139,14 @@ def process_sample_directory(
     if prompt is None:
         return False, f"prompt.txt not found in {sample_dir}"
     
-    # Look up prompt in reverse_lookup
-    if prompt not in lookup:
+    lookup_result = get_from_lookup(lookup, prompt)
+    if lookup_result is None:
         return False, f"Prompt not found in reverse_lookup: {repr(prompt)}"
-    
-    lookup_result = lookup[prompt]
-    if not isinstance(lookup_result, list) or len(lookup_result) != 2:
-        return False, f"Invalid lookup result format for {sample_dir}"
-    
+
     dimension, _ = lookup_result
     
     # Find the line number in the JSONL file
-    line_number = find_prompt_line_number(prompt, dimension, jsonl_dir, desc_length)
+    line_number = find_prompt_line_number(prompt, dimension, jsonl_dir, prompt_key)
     if line_number is None:
         return False, f"Prompt not found in JSONL file for dimension {dimension}: {sample_dir}"
     
@@ -148,40 +156,31 @@ def process_sample_directory(
         return False, f"image.png not found in {sample_dir}"
     
     # Create output directory structure
-    output_subdir = Path(output_dir) / dimension / model_name / desc_length
+    output_subdir = Path(output_dir) / dimension / model_name / prompt_key
     output_subdir.mkdir(parents=True, exist_ok=True)
     
     # Copy image to destination (using line_number as index)
     dest_image_path = output_subdir / f"{line_number}.png"
     shutil.copy2(src_image_path, dest_image_path)
     
-    return True, f"Processed {sample_dir} -> {dimension}/{model_name}/{desc_length}/{line_number}.png"
+    return True, f"Processed {sample_dir} -> {dimension}/{model_name}/{prompt_key}/{line_number}.png"
 
 
+@argh.arg("--desc-length", choices=["short", "long"])
 def main(
     input_dir: str,
-    exp_name: str,
-    checkpoint: str,
+    output_name: str = "",
     output_dir: str = "output",
     desc_length: str = "long",
     jsonl_dir: str = "data/test_prompts",
 ) -> int:
     """
     Convert sample directories to TIIF-Bench format.
-    
-    The model_name will be constructed as: <exp_name>__ckpt_<checkpoint>
-    
-    Example usage:
-        python eval/convert_to_tiif_format.py /path/to/samples
-            --exp_name my_experiment
-            --checkpoint 1000
-            --jsonl_dir data/test_prompts
     """
-    desc_length = f"{desc_length}_description"
-    # Construct model_name from exp_name and checkpoint
-    model_name = f"{exp_name}__ckpt_{checkpoint}"
-    # Validate input directory
+    prompt_key = f"{desc_length}_description"
     input_path = Path(input_dir)
+    if not output_name:
+        output_name = input_path.name
     if not input_path.is_dir():
         print(f"Error: Input directory does not exist: {input_dir}")
         return 1
@@ -204,6 +203,7 @@ def main(
     # Create output directory
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
+    print(f"Will save to {output_path}")
     
     # Process each sample directory
     success_count = 0
@@ -215,8 +215,8 @@ def main(
             sample_dir,
             lookup,
             output_path,
-            model_name,
-            desc_length,
+            output_name,
+            prompt_key,
             jsonl_path
         )
         
