@@ -1,5 +1,12 @@
 # <img src="assets/logo_transparent_bg.png" width="60px" align="center"> TIIF-Bench: How Does Your T2I Model Follow Your Instructions?
 
+```
+git clone https://github.com/cedric-scheerlinck/TIIF-Bench.git
+cd TIIF-Bench
+uv venv .venv
+uv pip install -r requirements
+```
+
 Official repository for the paper ["TIIF-Bench: How Does Your T2I Model Follow Your Instructions?"](https://www.arxiv.org/abs/2506.02161).
 
 [🌐 Webpage](https://a113n-w3i.github.io/TIIF_Bench/) [📖 Paper](https://www.arxiv.org/abs/2506.02161) [🤗 Huggingface Dataset](https://huggingface.co/datasets/A113NW3I/TIIF-Bench-Data) [🏆 Leaderboard](https://a113n-w3i.github.io/TIIF_Bench/#leaderboard)

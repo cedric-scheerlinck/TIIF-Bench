@@ -19,6 +19,7 @@ Target structure:
 
 import argh
 import json
+import jsonlines
 import shutil
 from pathlib import Path
 from tqdm import tqdm
@@ -59,19 +60,13 @@ def find_prompt_line_number(
     if not jsonl_file.exists():
         return None
     
-    with jsonl_file.open("r", encoding="utf-8") as f:
-        for line_idx, line in enumerate(f):
-            line = line.strip()
-            if not line:
+    with jsonlines.open(jsonl_file, "r") as reader:
+        for line_idx, data in enumerate(reader):
+            if not data:
                 continue
-            try:
-                data = json.loads(line)
-                # if data.get(prompt_key).strip() == prompt:
-                if data.get(prompt_key).strip() in prompt:
-                    return line_idx
-            except json.JSONDecodeError:
-                continue
-    
+            # if data.get(prompt_key).strip() == prompt:
+            if data.get(prompt_key, "").strip() in prompt:
+                return line_idx
     return None
 
 
@@ -166,12 +161,16 @@ def process_sample_directory(
     return True, f"Processed {sample_dir} -> {dimension}/{model_name}/{prompt_key}/{line_number}.png"
 
 
-@argh.arg("--desc-length", choices=["short", "long"])
+@argh.arg(
+    "desc-length",
+    choices=["short", "long"],
+    help="Whether inference was done on short or normal (long) prompts."
+)
 def main(
     input_dir: str,
+    desc_length: str,
     output_name: str = "",
     output_dir: str = "output",
-    desc_length: str = "long",
     jsonl_dir: str = "data/test_prompts",
 ) -> int:
     """

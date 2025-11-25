@@ -6,12 +6,14 @@ import openai
 import time
 import re
 from tqdm import tqdm
-import math
 import random
 import hashlib
-from datetime import datetime
+import base64
+from typing import Any
+import pyarrow as pa
+import lance
 
-raw_prompt = '''
+raw_prompt = """
 You are tasked with conducting a careful examination of the provided image. Based on the content of the image, please answer the following yes or no questions:
 
 Questions:
@@ -24,9 +26,9 @@ Note that:
 4. Directly return the answers to each question, without any additional content.
 5. Each answer must be on its own line!
 6. Make sure the number of output answers equal to the number of questions!
-'''
+"""
 
-raw_prompt_1 = '''
+raw_prompt_1 = """
 You are tasked with conducting a careful examination of the image. Based on the content of the image, please answer the following yes or no questions:
 
 Questions:
@@ -39,9 +41,9 @@ Each question must have only one answer. Output one answer if there is only one 
 Directly return the answers to each question, without any additional content.
 Each answer must be on its own line!
 Make sure the number of output answers equal to the number of questions!
-'''
+"""
 
-raw_prompt_2 = '''
+raw_prompt_2 = """
 You are tasked with carefully examining the provided image and answering the following yes or no questions:
 
 Questions:
@@ -55,12 +57,13 @@ Instructions:
 4. Return only the answers—no additional commentary.
 5. Each answer must be on its own line.
 6. Ensure the number of answers matches the number of questions.
-'''
+"""
 
-def load_jsonl_lines(jsonl_file):
+
+def load_jsonl_lines(jsonl_file: str) -> list[dict[str, Any]]:
     """读取 jsonl 文件，每行 parse 成 json 对象，返回列表"""
     lines = []
-    with open(jsonl_file, 'r', encoding='utf-8') as f:
+    with open(jsonl_file, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -73,134 +76,188 @@ def load_jsonl_lines(jsonl_file):
     return lines
 
 
-def get_cache_key(prompt, image_path, model):
-    """Generate SHA256 hash from prompt + image_path + model"""
-    cache_string = f"{prompt}|{image_path}|{model}"
-    return hashlib.sha256(cache_string.encode('utf-8')).hexdigest()
+class ApiCache:
+    """Lance-based cache for API calls and responses"""
 
+    @staticmethod
+    def _get_schema() -> pa.Schema:
+        """Define Lance schema for cache table"""
+        return pa.schema(
+            [
+                pa.field("request_hash", pa.string()),
+                pa.field("timestamp", pa.timestamp("s")),
+                pa.field("model", pa.string(), nullable=True),
+                pa.field("api_request_json", pa.string()),
+                pa.field("api_response_json", pa.string()),
+            ]
+        )
 
-def get_cache_path(cache_dir, cache_key):
-    """Return path to cache file"""
-    return os.path.join(cache_dir, f"{cache_key}.json")
+    def __init__(self, cache_dir: str) -> None:
+        """Initialize or open Lance cache dataset"""
+        ensure_dir(cache_dir)
+        cache_path = os.path.join(cache_dir, "cache.lance")
 
+        if os.path.exists(cache_path):
+            try:
+                self.dataset = lance.dataset(cache_path)
+                return
+            except Exception as e:
+                print(
+                    f"[Warning] Failed to open existing Lance cache: {e}. Creating new cache."
+                )
 
-def load_from_cache(cache_path):
-    """Load cached response if exists, return None otherwise"""
-    if os.path.exists(cache_path):
+        # Create new cache if it doesn't exist or if opening failed
+        schema = self._get_schema()
+        empty_table = pa.Table.from_pylist([], schema=schema)
+        self.dataset = lance.write_dataset(empty_table, cache_path, mode="create")
+
+    @staticmethod
+    def _get_request_hash(api_request_json: dict[str, Any]) -> str:
+        """Generate SHA256 hash from all API call parameters"""
+        params_str = json.dumps(api_request_json, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(params_str.encode("utf-8")).hexdigest()
+
+    def create(self, client: openai.OpenAI, api_request_json: dict[str, Any]) -> Any:
+        """Drop-in replacement for client.chat.completions.create() with caching"""
+
+        request_hash = self._get_request_hash(api_request_json)
+
+        # Check cache
         try:
-            with open(cache_path, 'r', encoding='utf-8') as f:
-                cached_data = json.load(f)
-                return cached_data
-        except Exception:
-            return None
-    return None
+            result = self.dataset.to_table(filter=f"request_hash = '{request_hash}'")
+            if len(result) > 0:
+                print(f"[Cache hit] Using cached response for {request_hash[:16]}...")
+                api_response = json.loads(result["api_response_json"][0].as_py())
+                from openai.types.chat import ChatCompletion
+
+                return ChatCompletion(**api_response)
+        except Exception as e:
+            print(f"[Warning] Cache lookup failed: {e}")
+
+        # Cache miss - make API call
+        completion = client.chat.completions.create(**api_request_json)
+
+        # Save to cache
+        try:
+            record = {
+                "request_hash": request_hash,
+                "timestamp": int(completion.created),
+                "model": api_request_json.get("model"),
+                "api_request_json": json.dumps(api_request_json, ensure_ascii=False),
+                "api_response_json": json.dumps(
+                    completion.model_dump(), ensure_ascii=False
+                ),
+            }
+            table = pa.Table.from_pylist([record], schema=self._get_schema())
+            self.dataset = lance.write_dataset(table, self.dataset.uri, mode="append")
+        except Exception as e:
+            print(f"[Warning] Failed to save to cache: {e}")
+
+        return completion
 
 
-def save_to_cache(cache_path, prompt, model, completion, temperature, system_message, base_url, task):
-    ensure_dir(os.path.dirname(cache_path))
-    cache_data = {
-        'prompt': prompt,
-        'model': model,
-        'temperature': temperature,
-        'system_message': system_message,
-        'base_url': base_url,
-        'task': task,
-        'timestamp': datetime.now().isoformat(),
-        'completion': completion.model_dump()
-    }
-    with open(cache_path, 'w', encoding='utf-8') as f:
-        json.dump(cache_data, f, ensure_ascii=False, indent=2)
-
-
-def generate_with_prompt(prompt, task, client, model='gpt-4o', cache_dir=None, temperature=1.0, base_url=None):
+def generate_with_prompt(
+    prompt: str,
+    task: dict[str, Any],
+    client: openai.OpenAI,
+    model: str = "gpt-4o",
+    cache: ApiCache | None = None,
+    temperature: float = 1.0,
+    base_url: str | None = None,
+) -> str:
     system_message = "You are a professional image critic."
     image_path = task["img_path"]
-    
-    # Check cache first
-    if cache_dir and False:
-        cache_key = get_cache_key(prompt, image_path, model)
-        cache_path = get_cache_path(cache_dir, cache_key)
-        cached_data = load_from_cache(cache_path)
-        if cached_data is not None:
-            completion_dict = cached_data.get('completion', {})
-            if completion_dict and 'choices' in completion_dict and len(completion_dict.get('choices', [])) > 0:
-                return completion_dict['choices'][0].get('message', {}).get('content')
-    
-    import base64
+
+    # Encode image to base64 for API call
     with open(image_path, "rb") as image_file:
-        image_data = base64.b64encode(image_file.read()).decode('utf-8')
-    
+        image_bytes = image_file.read()
+    image_data = base64.b64encode(image_bytes).decode("utf-8")
+
     messages = [
         {"role": "system", "content": system_message},
         {
-            "role": "user", 
+            "role": "user",
             "content": [
                 {"type": "text", "text": prompt},
                 {
                     "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/png;base64,{image_data}"
-                    }
-                }
-            ]
-        }
+                    "image_url": {"url": f"data:image/png;base64,{image_data}"},
+                },
+            ],
+        },
     ]
 
-    completion = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=temperature
-    )
-    
-    response = completion.choices[0].message.content
-    
-    # Save full completion to cache
-    if cache_dir:
-        cache_key = get_cache_key(prompt, image_path, model)
-        cache_path = get_cache_path(cache_dir, cache_key)
-        if base_url is None:
-            base_url = getattr(client, 'base_url', None) or (hasattr(client, '_client') and getattr(client._client, 'base_url', None)) or 'unknown'
-        save_to_cache(cache_path, prompt, model, completion, temperature, system_message, base_url, task)
-    
-    return response
+    api_request_json = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+    }
 
-def format_questions_prompt(raw_prompt, questions):
+    # Use cache if available, otherwise direct API call
+    if cache is not None:
+        completion = cache.create(client, api_request_json)
+    else:
+        completion = client.chat.completions.create(**api_request_json)
+
+    return completion.choices[0].message.content
+
+
+def format_questions_prompt(raw_prompt: str, questions: list[str]) -> str:
     question_texts = [item.strip() for item in questions]
     formatted_questions = "\n".join(question_texts)
     prompt_template = random.choice([raw_prompt, raw_prompt_1, raw_prompt_2])
     formatted_prompt = prompt_template.replace("##YNQuestions##", formatted_questions)
     return formatted_prompt
 
-def ensure_dir(path):
+
+def ensure_dir(path: str) -> None:
     if not os.path.exists(path):
         os.makedirs(path, exist_ok=True)
 
-def find_image_by_idx(img_dir, idx):
+
+def find_image_by_idx(img_dir: str, idx: int) -> str:
     pattern = os.path.join(img_dir, f"{idx}.*")
-    files = [f for f in glob.glob(pattern) if f.lower().endswith(('.png', '.jpg', '.jpeg', 'webp'))]
+    files = [
+        f
+        for f in glob.glob(pattern)
+        if f.lower().endswith((".png", ".jpg", ".jpeg", "webp"))
+    ]
     if files:
-        return files[0]   # 返回路径字符串
+        return files[0]  # 返回路径字符串
     else:
         raise FileNotFoundError(f"No image found for index {idx} in {img_dir}")
 
-def collect_tasks(jsonl_dir, image_dir, eval_model, output_dir, sample_idx_file=None, postfix=""):
+
+def collect_tasks(
+    jsonl_dir: str,
+    image_dir: str,
+    eval_model: str,
+    output_dir: str,
+    sample_idx_file: str | None = None,
+    postfix: str = "",
+) -> list[dict[str, Any]]:
     tasks = []
     jsonl_files = glob.glob(os.path.join(jsonl_dir, "*.jsonl"))
     if sample_idx_file is not None:
-        with open(sample_idx_file, 'r') as f:
+        with open(sample_idx_file, "r") as f:
             sample_idx = json.load(f)
     for jsonl_file in jsonl_files:
         attribute = os.path.splitext(os.path.basename(jsonl_file))[0]
         lines = load_jsonl_lines(jsonl_file)
-        attr_type = lines[0]['type']
+        attr_type = lines[0]["type"]
         if sample_idx_file is not None:
             line_indices = sample_idx[attr_type]
             lines = [lines[idx] for idx in line_indices]
         else:
             line_indices = list(range(len(lines)))
-        for desc in ['long_description', 'short_description']:
-            img_dir = os.path.join(image_dir, attr_type+postfix, eval_model, desc)
-            out_dir = os.path.join(output_dir, eval_model, attr_type, 'long' if desc.startswith('long') else 'short')
+        for desc in ["long_description", "short_description"]:
+            img_dir = os.path.join(image_dir, attr_type + postfix, eval_model, desc)
+            out_dir = os.path.join(
+                output_dir,
+                eval_model,
+                attr_type,
+                "long" if desc.startswith("long") else "short",
+            )
             ensure_dir(out_dir)
             for idx, line in zip(line_indices, lines):
                 try:
@@ -211,15 +268,17 @@ def collect_tasks(jsonl_dir, image_dir, eval_model, output_dir, sample_idx_file=
                 except Exception as e:
                     print(e)
                     continue
-                tasks.append({
-                    "attribute": attr_type,
-                    "desc": desc,
-                    "jsonl_file": jsonl_file,
-                    "line_idx": idx,
-                    "jsonl_line": line,
-                    "img_path": img_path,
-                    "out_path": out_path
-                })
+                tasks.append(
+                    {
+                        "attribute": attr_type,
+                        "desc": desc,
+                        "jsonl_file": jsonl_file,
+                        "line_idx": idx,
+                        "jsonl_line": line,
+                        "img_path": img_path,
+                        "out_path": out_path,
+                    }
+                )
     return tasks
 
 
@@ -227,39 +286,45 @@ class OutputFormatError(Exception):
     pass
 
 
-def extract_yes_no(model_output, questions):
-    lines = [line.strip() for line in model_output.strip().split('\n') if line.strip()]
+def extract_yes_no(model_output: str, questions: list[str]) -> list[str]:
+    lines = [line.strip() for line in model_output.strip().split("\n") if line.strip()]
     preds = []
     for idx, line in enumerate(lines):
-        m = re.match(r'^(yes|no)\b', line.strip(), flags=re.IGNORECASE)
+        m = re.match(r"^(yes|no)\b", line.strip(), flags=re.IGNORECASE)
         if m:
             preds.append(m.group(1).lower())
         else:
             continue
     if len(preds) != len(questions):
-        raise OutputFormatError(f"Preds count {len(preds)} != questions count {len(questions)}")
+        raise OutputFormatError(
+            f"Preds count {len(preds)} != questions count {len(questions)}"
+        )
     return preds
 
-def main(args):
-    client = openai.OpenAI(
-        api_key=args.api_key,
-        base_url=args.base_url
+
+def main(args: argparse.Namespace) -> None:
+    client = openai.OpenAI(api_key=args.api_key, base_url=args.base_url)
+
+    # Initialize Lance cache
+    cache_dir = os.path.join(args.output_dir, "cache")
+    cache = ApiCache(cache_dir)
+    print(f"Initialized Lance cache at {cache_dir}/cache.lance")
+
+    tasks = collect_tasks(
+        args.jsonl_dir,
+        args.image_dir,
+        args.eval_model,
+        args.output_dir,
+        args.sample_idx_file,
+        args.postfix,
     )
-
-    # Create cache directory
-    cache_dir = os.path.join(args.output_dir, '.cache')
-    ensure_dir(cache_dir)
-
-    tasks = collect_tasks(args.jsonl_dir, args.image_dir, args.eval_model, args.output_dir, args.sample_idx_file, args.postfix)
     print(f"Total tasks to process: {len(tasks)}")
-    # fail_count = 0
 
+    retry_tasks = []
     for i in range(3):
         if not tasks:
             break
-        print(f"Retry {i}")
-    # while tasks:
-    # if True:
+        print(f"Attempt {i + 1} of 3")
         retry_tasks = []
         for task in tqdm(tasks):
             try:
@@ -267,7 +332,9 @@ def main(args):
                 questions = item.get("yn_question_list", [])
                 gt_answers = item.get("yn_answer_list", [])
                 prompt = format_questions_prompt(raw_prompt, questions)
-                model_output = generate_with_prompt(prompt, task, client, model=args.model, cache_dir=cache_dir, base_url=args.base_url)
+                model_output = generate_with_prompt(
+                    prompt, task, client, model=args.model, cache=cache, temperature=1.0
+                )
                 print(model_output)
                 model_pred = extract_yes_no(model_output, questions)
                 result = {
@@ -278,34 +345,58 @@ def main(args):
                     "questions": questions,
                     "gt_answers": gt_answers,
                     "model_pred": model_pred,
-                    "model_output": model_output
+                    "model_output": model_output,
                 }
                 with open(task["out_path"], "w", encoding="utf-8") as fout:
                     json.dump(result, fout, ensure_ascii=False, indent=2)
                 print(f"Saved: {task['out_path']}")
 
             except Exception as e:
-                print(f"[Error] {questions} {task['img_path']} : {e}")
-                # fail_count += 1
+                print(
+                    f"[Error] {task.get('jsonl_line', {}).get('yn_question_list', [])} {task.get('img_path', 'unknown')} : {e}"
+                )
                 retry_tasks.append(task)
                 time.sleep(2)
         if retry_tasks:
             print(f"Retrying {len(retry_tasks)} failed tasks...")
             time.sleep(5)
         tasks = retry_tasks
-    print(f"Fail count: {len(retry_tasks)} after {i} retries")
+
+    if retry_tasks:
+        print(f"Failed to process {len(retry_tasks)} tasks after 3 attempts")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--jsonl_dir", type=str, required=True, help="Directory containing jsonl files")
-    parser.add_argument("--image_dir", type=str, required=True, help="Directory containing images")
-    parser.add_argument("--eval_model", type=str, required=True, help="name of the eval model")
-    parser.add_argument("--output_dir", type=str, required=True, help="Directory to save output json files")
+    parser.add_argument(
+        "--jsonl_dir", type=str, required=True, help="Directory containing jsonl files"
+    )
+    parser.add_argument(
+        "--image_dir", type=str, required=True, help="Directory containing images"
+    )
+    parser.add_argument(
+        "--eval_model", type=str, required=True, help="name of the eval model"
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        required=True,
+        help="Directory to save output json files",
+    )
     parser.add_argument("--api_key", type=str, default="sk-xxx", help="OpenAI API key")
-    parser.add_argument("--base_url", type=str, default="https://api.openai.com/v1", help="OpenAI API base url")
+    parser.add_argument(
+        "--base_url",
+        type=str,
+        default="https://api.openai.com/v1",
+        help="OpenAI API base url",
+    )
     parser.add_argument("--model", type=str, default="gpt-4o", help="Model name")
-    parser.add_argument("--sample_idx_file", type=str, default=None, help="File containing sample indices")
+    parser.add_argument(
+        "--sample_idx_file",
+        type=str,
+        default=None,
+        help="File containing sample indices",
+    )
     parser.add_argument("--postfix", type=str, default="")
 
     args = parser.parse_args()
